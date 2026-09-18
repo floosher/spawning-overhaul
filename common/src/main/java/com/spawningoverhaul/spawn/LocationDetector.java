@@ -8,9 +8,12 @@ import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Performs environmental checks for spawn location detection.
- * Optimized for performance with cylinder scans and minimal world queries.
+ * Optimized for performance with cylinder scans and zero-allocation queries.
  */
 public class LocationDetector {
+
+    private static final ThreadLocal<BlockPos.MutableBlockPos> MUTABLE_POS =
+            ThreadLocal.withInitial(BlockPos.MutableBlockPos::new);
 
     /**
      * Check if the position can see the sky (is outside).
@@ -20,7 +23,9 @@ public class LocationDetector {
      * @return true if position can see sky
      */
     public static boolean isOutside(Level level, BlockPos pos) {
-        return level.canSeeSky(pos.above());
+        BlockPos.MutableBlockPos mutablePos = MUTABLE_POS.get();
+        mutablePos.set(pos.getX(), pos.getY() + 1, pos.getZ());
+        return level.canSeeSky(mutablePos);
     }
 
     /**
@@ -57,6 +62,7 @@ public class LocationDetector {
      * Returns a value from 0.0 (no forest) to 1.0 (maximum density).
      * Uses cylinder scan (not sphere) for better performance.
      * Scans Y ±3 blocks only to limit vertical range.
+     * Reuses ThreadLocal MutableBlockPos to eliminate heap allocations.
      *
      * @param level The level/world
      * @param pos The center position
@@ -66,19 +72,31 @@ public class LocationDetector {
         SpawningConfig config = SpawningConfig.HANDLER().instance();
         int radius = config.denseForestScanRadius;
         int maxLogs = config.denseForestLogThreshold;
+
+        if (radius <= 0 || maxLogs <= 0) {
+            return 0.0;
+        }
+
         int logCount = 0;
+        int radiusSq = radius * radius;
+        int posX = pos.getX();
+        int posY = pos.getY();
+        int posZ = pos.getZ();
+
+        BlockPos.MutableBlockPos checkPos = MUTABLE_POS.get();
 
         // Cylinder scan: iterate through X and Z in radius, limited Y range
         for (int dx = -radius; dx <= radius; dx++) {
+            int dxSq = dx * dx;
             for (int dz = -radius; dz <= radius; dz++) {
                 // Check if within circular radius (not square)
-                if (dx * dx + dz * dz > radius * radius) {
+                if (dxSq + dz * dz > radiusSq) {
                     continue;
                 }
 
                 // Scan Y ±3 blocks only
                 for (int dy = -3; dy <= 3; dy++) {
-                    BlockPos checkPos = pos.offset(dx, dy, dz);
+                    checkPos.set(posX + dx, posY + dy, posZ + dz);
                     BlockState state = level.getBlockState(checkPos);
 
                     // Check if block is a log (uses vanilla log tag)
