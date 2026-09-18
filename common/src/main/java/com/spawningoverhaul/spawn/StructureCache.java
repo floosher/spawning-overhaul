@@ -1,22 +1,18 @@
 package com.spawningoverhaul.spawn;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
 import com.spawningoverhaul.config.SpawningConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.structure.Structure;
 
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 /**
- * High-performance structure detection using Guava cache.
- * Chunk-level granularity (16x16 blocks share cache entry) with 10-second TTL.
+ * High-performance structure detection using chunk-level structure references.
+ * Directly queries active chunk structure references without full registry scans.
  */
 public class StructureCache {
 
@@ -27,6 +23,13 @@ public class StructureCache {
             "minecraft:monument",
             "minecraft:mansion",
             "minecraft:mineshaft",
+            "minecraft:mineshaft_mesa",
+            "minecraft:pillager_outpost",
+            "minecraft:ancient_city",
+            "minecraft:trial_chambers",
+            "minecraft:bastion_remnant",
+            "minecraft:end_city",
+            "minecraft:swamp_hut",
             "minecraft:dungeon"
     );
 
@@ -35,16 +38,9 @@ public class StructureCache {
             "minecraft:village"
     );
 
-    // Cache: ChunkPos (as Long) -> Boolean (is dangerous structure present)
-    // 10 second TTL, chunk-level granularity
-    private static final Cache<CacheKey, Boolean> STRUCTURE_CACHE = CacheBuilder.newBuilder()
-            .expireAfterWrite(10, TimeUnit.SECONDS)
-            .maximumSize(1000)
-            .build();
-
     /**
      * Check if a position is in a dangerous structure.
-     * Uses chunk-level caching for performance.
+     * Fast O(1) query on chunk structure references.
      *
      * @param level The level/world
      * @param pos The position to check
@@ -55,61 +51,50 @@ public class StructureCache {
             return false;
         }
 
-        // Create cache key from chunk coordinates
-        int chunkX = pos.getX() >> 4;
-        int chunkZ = pos.getZ() >> 4;
-        CacheKey key = new CacheKey(serverLevel.dimension(), chunkX, chunkZ);
-
-        // Check cache first
-        Boolean cached = STRUCTURE_CACHE.getIfPresent(key);
-        if (cached != null) {
-            return cached;
+        SpawningConfig config = SpawningConfig.HANDLER().instance();
+        if (!config.enableStructureModifications) {
+            return false;
         }
 
-        // Cache miss - perform structure lookup
-        boolean isDangerous = checkStructureAt(serverLevel, pos);
-        STRUCTURE_CACHE.put(key, isDangerous);
-        return isDangerous;
+        return checkStructureAt(serverLevel, pos, config);
     }
 
     /**
-     * Perform actual structure lookup at a position.
-     * Checks against hardcoded dangerous/safe structures and config lists.
+     * Perform structure lookup at a position.
+     * Queries only structures referenced in the chunk to avoid iterating the global registry.
      *
      * @param level The server level
      * @param pos The position to check
+     * @param config The spawning configuration
      * @return true if dangerous structure present
      */
-    private static boolean checkStructureAt(ServerLevel level, BlockPos pos) {
-        SpawningConfig config = SpawningConfig.HANDLER().instance();
-        var structureLookup = level.registryAccess().lookupOrThrow(Registries.STRUCTURE);
-
-        // Get all structures at this position
+    private static boolean checkStructureAt(ServerLevel level, BlockPos pos, SpawningConfig config) {
         var structureManager = level.structureManager();
+        var structures = structureManager.getAllStructuresAt(pos);
+        if (structures.isEmpty()) {
+            return false;
+        }
 
-        // Check each registered structure type
-        for (var entry : structureLookup.listElements().toList()) {
-            ResourceKey<Structure> structureKey = entry.key();
-            ResourceLocation structureId = structureKey.location();
+        var structureRegistry = level.registryAccess().registryOrThrow(Registries.STRUCTURE);
+
+        for (Structure structure : structures.keySet()) {
+            ResourceLocation structureId = structureRegistry.getKey(structure);
+            if (structureId == null) {
+                continue;
+            }
             String structureIdString = structureId.toString();
 
-            // Check if structure is present at position
-            if (structureManager.getStructureAt(pos, entry.value()).isValid()) {
-                // Check if it's a safe structure (skip these)
-                if (SAFE_STRUCTURES.contains(structureIdString)) {
-                    continue;
-                }
+            // Check if it's a safe structure
+            if (SAFE_STRUCTURES.contains(structureIdString)
+                    || structureIdString.startsWith("minecraft:village")
+                    || config.additionalSafeStructures.contains(structureIdString)) {
+                continue;
+            }
 
-                if (config.additionalSafeStructures.contains(structureIdString)) {
-                    continue;
-                }
-
-                // Check if it's a dangerous structure
-                if (DANGEROUS_STRUCTURES.contains(structureIdString)) {
-                    return true;
-                }
-
-                if (config.additionalDangerousStructures.contains(structureIdString)) {
+            // Check if it's a dangerous structure
+            if (DANGEROUS_STRUCTURES.contains(structureIdString)
+                    || config.additionalDangerousStructures.contains(structureIdString)) {
+                if (structureManager.getStructureWithPieceAt(pos, structure).isValid()) {
                     return true;
                 }
             }
@@ -117,9 +102,4 @@ public class StructureCache {
 
         return false;
     }
-
-    /**
-     * Cache key combining dimension and chunk coordinates.
-     */
-    private record CacheKey(ResourceKey<Level> dimension, int chunkX, int chunkZ) {}
 }
