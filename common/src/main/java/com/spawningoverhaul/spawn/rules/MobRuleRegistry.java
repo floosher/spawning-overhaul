@@ -2,6 +2,8 @@ package com.spawningoverhaul.spawn.rules;
 
 import com.spawningoverhaul.config.SpawningConfig;
 import com.spawningoverhaul.spawn.SpawnContext;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EntityType;
 
 import java.util.HashMap;
@@ -32,11 +34,24 @@ public class MobRuleRegistry {
      * @return The spawn multiplier (1.0 if no rule registered)
      */
     public static double getMultiplier(SpawnContext context) {
+        double multiplier = 1.0;
         MobSpawnRule rule = RULES.get(context.getEntityType());
         if (rule != null) {
-            return rule.getSpawnMultiplier(context);
+            multiplier *= rule.getSpawnMultiplier(context);
         }
-        return 1.0;
+
+        SpawningConfig config = SpawningConfig.HANDLER().instance();
+        if (config.mobSpecificMultipliers != null && !config.mobSpecificMultipliers.isEmpty()) {
+            ResourceLocation entityKey = BuiltInRegistries.ENTITY_TYPE.getKey(context.getEntityType());
+            if (entityKey != null) {
+                Double customMultiplier = config.mobSpecificMultipliers.get(entityKey.toString());
+                if (customMultiplier != null) {
+                    multiplier *= customMultiplier;
+                }
+            }
+        }
+
+        return multiplier;
     }
 
     /**
@@ -44,10 +59,9 @@ public class MobRuleRegistry {
      * Called during mod initialization.
      */
     public static void registerDefaults() {
-        SpawningConfig config = SpawningConfig.HANDLER().instance();
-
         // Spider Rule: ONLY spawn in caves if enabled
         register(EntityType.SPIDER, context -> {
+            SpawningConfig config = SpawningConfig.HANDLER().instance();
             if (config.spiderOnlyInCave) {
                 return context.isInCave() ? 1.0 : 0.0;
             }
@@ -56,6 +70,7 @@ public class MobRuleRegistry {
 
         // Cave Spider Rule: Same as spider
         register(EntityType.CAVE_SPIDER, context -> {
+            SpawningConfig config = SpawningConfig.HANDLER().instance();
             if (config.spiderOnlyInCave) {
                 return context.isInCave() ? 1.0 : 0.0;
             }
@@ -64,6 +79,7 @@ public class MobRuleRegistry {
 
         // Creeper Rule: Block near dangerous structures if enabled
         register(EntityType.CREEPER, context -> {
+            SpawningConfig config = SpawningConfig.HANDLER().instance();
             if (config.disableCreeperNearStructure && context.isInDangerousStructure()) {
                 return 0.0;
             }
