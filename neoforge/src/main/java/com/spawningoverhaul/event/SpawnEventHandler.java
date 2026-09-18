@@ -4,7 +4,9 @@ import com.spawningoverhaul.SpawningOverhaulCommon;
 import com.spawningoverhaul.config.SpawningConfig;
 import com.spawningoverhaul.spawn.SpawnContext;
 import com.spawningoverhaul.spawn.SpawnMultiplierCalculator;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.MobSpawnType;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.entity.living.MobSpawnEvent;
 
@@ -28,6 +30,15 @@ public class SpawnEventHandler {
             return; // Let vanilla handle it
         }
 
+        // Fast filter for non-natural spawn types (spawners, breeding, spawn eggs, commands, etc.)
+        MobSpawnType spawnType = event.getSpawnType();
+        if (spawnType == MobSpawnType.SPAWNER || spawnType == MobSpawnType.TRIAL_SPAWNER
+                || spawnType == MobSpawnType.SPAWN_EGG || spawnType == MobSpawnType.COMMAND
+                || spawnType == MobSpawnType.BREEDING || spawnType == MobSpawnType.BUCKET
+                || spawnType == MobSpawnType.CONVERSION || spawnType == MobSpawnType.DISPENSER) {
+            return;
+        }
+
         // Verify we're on the server side and have a ServerLevel
         if (!(event.getLevel() instanceof ServerLevel serverLevel)) {
             return;
@@ -39,16 +50,11 @@ public class SpawnEventHandler {
         }
 
         // Get spawn information from event
-        // Note: MobSpawnEvent.PositionCheck provides access to the Mob entity being spawned
         var mob = event.getEntity();
-        if (mob == null) {
-            return;
-        }
 
         var entityType = mob.getType();
-        // Create BlockPos from event coordinates
-        var spawnPos = new net.minecraft.core.BlockPos((int) event.getX(), (int) event.getY(), (int) event.getZ());
-        var spawnType = event.getSpawnType();
+        // Create BlockPos correctly using floor coordinates
+        var spawnPos = BlockPos.containing(event.getX(), event.getY(), event.getZ());
 
         // Create spawn context for this attempt
         SpawnContext context = new SpawnContext(serverLevel, spawnPos, entityType, spawnType);
@@ -64,7 +70,7 @@ public class SpawnEventHandler {
             event.setResult(MobSpawnEvent.PositionCheck.Result.FAIL);
 
             // Debug logging
-            if (config.debugmode)
+            if (config.debugmode) {
                 if (SpawningOverhaulCommon.getLogger() != null) {
                     SpawningOverhaulCommon.getLogger().info(
                             "Denied spawn of {} at {} (multiplier: {}, outside: {}, cave: {}, forest: {})",
@@ -76,6 +82,7 @@ public class SpawnEventHandler {
                             String.format("%.0f%%", context.getForestDensity() * 100.0)
                     );
                 }
+            }
         }
         // If allowed, leave result as DEFAULT to let vanilla checks proceed
     }
