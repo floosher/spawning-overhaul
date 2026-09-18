@@ -33,11 +33,14 @@ public class SpawnMultiplierCalculator {
         }
 
         // Calculate forest contribution (scales from min to max based on density)
+        // Optimization: skip scanning blocks for forest if cave multiplier is already >= max possible forest multiplier
         double forestMultiplier = 0.0;
-        double forestDensity = context.getForestDensity();
-        if (forestDensity > 0.0) {
-            // forestDensity is already 0.0-1.0
-            forestMultiplier = config.minForestMultiplier + (config.maxForestMultiplier - config.minForestMultiplier) * forestDensity;
+        if (caveMultiplier < config.maxForestMultiplier) {
+            double forestDensity = context.getForestDensity();
+            if (forestDensity > 0.0) {
+                // forestDensity is already 0.0-1.0
+                forestMultiplier = config.minForestMultiplier + (config.maxForestMultiplier - config.minForestMultiplier) * forestDensity;
+            }
         }
 
         // Use the highest multiplier (base, cave, or forest)
